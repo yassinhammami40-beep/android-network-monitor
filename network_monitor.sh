@@ -2,7 +2,7 @@
 
 ################################################################################
 # Android Network Monitor - Enhanced with DNS Resolution
-# Organized folder structure and clean output
+# Clean browser-friendly output
 ################################################################################
 
 # Directory Structure
@@ -149,12 +149,12 @@ while true; do
   
   # Initialize history headers if new day
   if [ ! -f "$IP_HISTORY" ]; then
-    printf "%-12s | %-18s | %-8s | %-8s | %-35s\n" \
+    printf "%-10s %-16s %-8s %-8s %-30s\n" \
       "TIMESTAMP" "IP" "PORT" "UID" "PACKAGE" > "$IP_HISTORY"
   fi
   
   if [ ! -f "$DOMAIN_HISTORY" ]; then
-    printf "%-12s | %-18s | %-40s | %-35s | %-8s\n" \
+    printf "%-10s %-16s %-35s %-30s %-6s\n" \
       "TIMESTAMP" "IP" "DOMAIN" "PACKAGE" "PORT" > "$DOMAIN_HISTORY"
   fi
 
@@ -178,19 +178,19 @@ while true; do
   ################################################################################
   
   {
-    echo "╔════════════════════════════════════════════╗"
-    echo "║      ACTIVE NETWORK INTERFACES             ║"
-    echo "╠════════════════════════════════════════════╣"
-    printf "║ %-12s | %-12s | %-12s ║\n" "INTERFACE" "RX-BYTES" "TX-BYTES"
-    echo "╠════════════════════════════════════════════╣"
+    echo "========================================="
+    echo "ACTIVE NETWORK INTERFACES"
+    echo "========================================="
+    printf "%-12s %-14s %-14s\n" "INTERFACE" "RX-BYTES" "TX-BYTES"
+    echo "-----------------------------------------"
 
     awk 'NR > 2 {
       iface=$1; sub(":", "", iface)
       if ($2 > 0 || $10 > 0) 
-        printf "║ %-12s | %-12s | %-12s ║\n", iface, $2, $10
+        printf "%-12s %-14s %-14s\n", iface, $2, $10
     }' /proc/net/dev
     
-    echo "╚════════════════════════════════════════════╝"
+    echo ""
   } > "$INTERFACES_LOG"
 
   ################################################################################
@@ -263,18 +263,18 @@ while true; do
   ' /proc/net/tcp /proc/net/tcp6 > "$TCP_OUT"
 
   {
-    echo "╔════════════════════════════════════════════════════════════════╗"
-    echo "║              TCP CONNECTIONS (ESTABLISHED)                    ║"
-    echo "╠════════════════════════════════════════════════════════════════╣"
-    printf "║ %-25s | %-25s | %-8s | %-8s ║\n" "LOCAL" "REMOTE" "STATE" "UID"
-    echo "╠════════════════════════════════════════════════════════════════╣"
+    echo "========================================="
+    echo "TCP CONNECTIONS (ESTABLISHED)"
+    echo "========================================="
+    printf "%-22s %-22s %-8s %-8s\n" "LOCAL" "REMOTE" "STATE" "UID"
+    echo "-----------------------------------------"
 
     while IFS="|" read -r loc rem queue state uid inode; do
       [ -z "$loc" ] && continue
-      printf "║ %-25s | %-25s | %-8s | %-8s ║\n" "$loc" "$rem" "$state" "$uid"
+      printf "%-22s %-22s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
     done < "$TCP_OUT"
     
-    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo ""
   } > "$TCP_LOG"
   
   rm -f "$TCP_OUT"
@@ -345,18 +345,18 @@ while true; do
   ' /proc/net/udp /proc/net/udp6 > "$UDP_OUT"
 
   {
-    echo "╔════════════════════════════════════════════════════════════════╗"
-    echo "║              UDP CONNECTIONS (ACTIVE)                         ║"
-    echo "╠════════════════════════════════════════════════════════════════╣"
-    printf "║ %-25s | %-25s | %-8s | %-8s ║\n" "LOCAL" "REMOTE" "TYPE" "UID"
-    echo "╠════════════════════════════════════════════════════════════════╣"
+    echo "========================================="
+    echo "UDP CONNECTIONS (ACTIVE)"
+    echo "========================================="
+    printf "%-22s %-22s %-8s %-8s\n" "LOCAL" "REMOTE" "TYPE" "UID"
+    echo "-----------------------------------------"
 
     while IFS="|" read -r loc rem state uid inode; do
       [ -z "$loc" ] && continue
-      printf "║ %-25s | %-25s | %-8s | %-8s ║\n" "$loc" "$rem" "$state" "$uid"
+      printf "%-22s %-22s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
     done < "$UDP_OUT"
     
-    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo ""
   } > "$UDP_LOG"
   
   rm -f "$UDP_OUT"
@@ -366,19 +366,17 @@ while true; do
   ################################################################################
   
   {
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "   Network Activity - $DATETIME"
-    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    echo "========================================="
+    echo "NETWORK ACTIVITY - $DATETIME"
+    echo "========================================="
     echo ""
     cat "$INTERFACES_LOG"
-    echo ""
     cat "$TCP_LOG"
-    echo ""
     cat "$UDP_LOG"
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "   Updated: $DATETIME"
-    echo "═══════════════════════════════════════════════════════════════"
+    echo "========================================="
+    echo "Updated: $DATETIME"
+    echo "========================================="
   } > "$CURRENT_LOG"
 
   ################################################################################
@@ -395,13 +393,13 @@ while true; do
         domain=$(get_domain "$rip")
         
         # Log to IP History
-        printf "%-12s | %-18s | %-8s | %-8s | %-35s\n" "$TIMESTAMP" "$rip" "$rport" "$uid" "$pkg" >> "$IP_HISTORY"
+        printf "%-10s %-16s %-8s %-8s %-30s\n" "$TIMESTAMP" "$rip" "$rport" "$uid" "$pkg" >> "$IP_HISTORY"
         
         # Log to Domain History - DOMAIN and PACKAGE columns closer together
-        printf "%-12s | %-18s | %-40s | %-35s | %-8s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" "$rport" >> "$DOMAIN_HISTORY"
+        printf "%-10s %-16s %-35s %-30s %-6s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" "$rport" >> "$DOMAIN_HISTORY"
         
         # Log to resolved domains (global)
-        printf "%-12s | %-18s | %-40s | %-35s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" >> "$DNS_RESOLVED"
+        printf "%-10s %-16s %-35s %-30s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" >> "$DNS_RESOLVED"
       fi
     done < "$TEMP_IPS"
     rm -f "$TEMP_IPS"
