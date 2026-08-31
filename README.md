@@ -80,6 +80,8 @@ TIME      REMOTE IP         PORT  UID    PID    PACKAGE
 03:20:24  41.231.245.114    443   1000   -      com.miui.daemon
 03:23:26  41.231.245.33     443   10231  22747  com.miui.videoplayer
 
+Then in Termux:
+
 Current limitations
 
 - IPv4 reporting is currently more complete than IPv6 parsing.
