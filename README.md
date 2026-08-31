@@ -27,20 +27,20 @@ The main socket-to-application mapping works approximately like this:
 /proc/net/tcp6
 /proc/net/udp
 /proc/net/udp6
-        │
-        ▼
+        |
+        v
    Socket inode
-        │
-        ▼
-/proc/<PID>/fd/
-        │
-        ▼
+        |
+        v
+ /proc/<PID>/fd/
+        |
+        v
        PID
-        │
-        ▼
+        |
+        v
        UID
-        │
-        ▼
+        |
+        v
  Android package
 
 The script uses the socket inode to search process file descriptors and identify which process owns a network socket. The process UID can then be associated with an Android package.
@@ -74,10 +74,11 @@ Example
 
 Example output:
 
-03:19:42  142.251.110.119  443   10220  20247  com.google.android.youtube
-03:19:42  172.217.116.4    443   10220  20247  com.google.android.youtube
-03:20:24  41.231.245.114   443   1000   -      com.miui.daemon
-03:23:26  41.231.245.33    443   10231  22747  com.miui.videoplayer
+TIME      REMOTE IP         PORT  UID    PID    PACKAGE
+03:19:42  142.251.110.119   443   10220  20247  com.google.android.youtube
+03:19:42  172.217.116.4     443   10220  20247  com.google.android.youtube
+03:20:24  41.231.245.114    443   1000   -      com.miui.daemon
+03:23:26  41.231.245.33     443   10231  22747  com.miui.videoplayer
 
 Current limitations
 
