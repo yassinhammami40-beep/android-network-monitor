@@ -20,22 +20,29 @@ This project explores how Android network sockets map to processes, UIDs, and ap
 
 ## How it works
 
-The script reads /proc/* network tables, extracts socket inodes, and resolves which process owns each socket by scanning process file descriptors. From the PID it derives the UID and then the Android package name (when available). The mapping flow is approximately:
+The script reads /proc/* network tables, extracts socket inodes, and resolves which process owns each socket by scanning process file descriptors. From the PID it derives the UID and then the Android package name (when available). The mapping flow is shown below:
 
+```
 /proc/net/tcp
 /proc/net/tcp6
 /proc/net/udp
 /proc/net/udp6
-  ↓
-Socket inode
-  ↓
-/proc/<PID>/fd/ (find socket:<inode>)
-  ↓
-PID
-  ↓
-UID
-  ↓
+    |
+    v
+ Socket inode
+    |
+    v
+ /proc/<PID>/fd/   (find socket:<inode>)
+    |
+    v
+   PID
+    |
+    v
+   UID
+    |
+    v
 Android package
+```
 
 ## Requirements
 
