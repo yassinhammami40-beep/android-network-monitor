@@ -89,7 +89,9 @@ TIME      REMOTE IP         PORT  UID    PID    PACKAGE
 
 ## Screenshot
 
-![Network Monitor output](docs/screenshot.png)
+![Network Monitor output](./Screenshot_20260831_191202_Chrome.jpg)
+
+*Screenshot shows the script's terminal output (interfaces, TCP and UDP sections).* 
 
 ## Current limitations
 
