@@ -1,8 +1,14 @@
 #!/system/bin/sh
 
 ################################################################################
-# Android Network Monitor - Enhanced with DNS Resolution
-# Clean browser-friendly output
+# Android Network Monitor v2.0 - Advanced Network Analysis
+# Features:
+#  - Full IPv4 and IPv6 support with IPv4-mapped IPv6 handling
+#  - TCP/UDP connection tracking with lifecycle management
+#  - DNS correlation and caching
+#  - Connection state tracking (NEW, ACTIVE, CLOSED)
+#  - Multiple output formats (TXT, CSV, JSON)
+#  - Comprehensive logging and metrics
 ################################################################################
 
 # Directory Structure
@@ -10,41 +16,56 @@ BASE_DIR="/sdcard/Download/network-monitor"
 LOGS_DIR="$BASE_DIR/logs"
 ACTIVITY_DIR="$LOGS_DIR/activity"
 DOMAINS_DIR="$BASE_DIR/domains"
+STATS_DIR="$BASE_DIR/stats"
 CACHE_DIR="/data/local/tmp/.net_monitor_cache"
 
-# Files (.txt for browser compatibility)
+# Output Files (.txt for browser compatibility)
 CURRENT_LOG="$ACTIVITY_DIR/current.txt"
 INTERFACES_LOG="$ACTIVITY_DIR/interfaces.txt"
 TCP_LOG="$ACTIVITY_DIR/tcp_connections.txt"
 UDP_LOG="$ACTIVITY_DIR/udp_connections.txt"
+CONNECTION_STATE="$ACTIVITY_DIR/connection_state.csv"
 
+# DNS and Domain Files
 DNS_CACHE="$CACHE_DIR/dns_cache.db"
-DNS_RESOLVED="$DOMAINS_DIR/resolved_domains.txt"
+DNS_RESOLVED="$DOMAINS_DIR/resolved_domains.csv"
+IP_HISTORY="$BASE_DIR/ip_history_$(date +%Y-%m-%d).csv"
+DOMAIN_HISTORY="$DOMAINS_DIR/domain_history_$(date +%Y-%m-%d).csv"
+DOMAIN_CORRELATION="$DOMAINS_DIR/domain_correlation.csv"
 
-IP_HISTORY="$BASE_DIR/ip_history_$(date +%Y-%m-%d).txt"
-DOMAIN_HISTORY="$DOMAINS_DIR/domain_history_$(date +%Y-%m-%d).txt"
+# Statistics
+STATS_SUMMARY="$STATS_DIR/summary_$(date +%Y-%m-%d).txt"
+STATS_JSON="$STATS_DIR/stats_$(date +%Y-%m-%d).json"
 
+# Temporary Files
 TEMP_IPS="/data/local/tmp/current_ips.tmp"
+TEMP_CONNECTIONS="/data/local/tmp/connections.tmp"
+TEMP_STATE="/data/local/tmp/connection_state.tmp"
 FD_MAP="/data/local/tmp/fd_inodes.tmp"
+PREV_STATE="/data/local/tmp/prev_state.tmp"
+
+# Constants
+RESOLUTION_TIMEOUT=3
+DNS_CACHE_TTL=3600  # 1 hour
 
 ################################################################################
 # Initialize Directories & Cleanup
 ################################################################################
 
 init_directories() {
-  mkdir -p "$LOGS_DIR" "$ACTIVITY_DIR" "$DOMAINS_DIR" "$CACHE_DIR" 2>/dev/null
+  mkdir -p "$LOGS_DIR" "$ACTIVITY_DIR" "$DOMAINS_DIR" "$STATS_DIR" "$CACHE_DIR" 2>/dev/null
   
   # Keep only current logs (delete old activity logs, keep history)
   find "$ACTIVITY_DIR" -type f -mtime +0 -delete 2>/dev/null
   
   # Clean temporary files
-  rm -f "$TEMP_IPS" "$FD_MAP" /data/local/tmp/*_processed.tmp 2>/dev/null
+  rm -f "$TEMP_IPS" "$TEMP_CONNECTIONS" "$TEMP_STATE" "$FD_MAP" /data/local/tmp/*_processed.tmp 2>/dev/null
 }
 
 # Initialize on startup
 if [ ! -d "$BASE_DIR" ]; then
   init_directories
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Network Monitor initialized" > "$LOGS_DIR/monitor.log"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Network Monitor v2.0 initialized" > "$LOGS_DIR/monitor.log"
 fi
 
 ################################################################################
@@ -57,9 +78,14 @@ get_domain() {
   
   # Skip private/local IPs
   case "$ip" in
-    127.*|localhost|::1) echo "localhost"; return ;;
+    127.*|localhost|::1|0000:0000:0000:0000:0000:0000:0000:0001) echo "localhost"; return ;;
     192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "private"; return ;;
     0.0.0.0|255.255.255.255|169.254.*) echo "reserved"; return ;;
+  esac
+  
+  # IPv6 link-local
+  case "$ip" in
+    fe80:*|ff00:*|ff02:*) echo "link-local"; return ;;
   esac
   
   # Check cache first
@@ -71,8 +97,8 @@ get_domain() {
     fi
   fi
   
-  # Resolve via ip-api.com
-  domain=$(timeout 3 sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"\([^\"]*\)\".*/\1/p'" 2>/dev/null)
+  # Resolve via ip-api.com (with timeout and error handling)
+  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"\([^\"]*\)\".*/\1/p'" 2>/dev/null)
   
   # Extract main domain
   if [ -n "$domain" ]; then
@@ -86,7 +112,7 @@ get_domain() {
 }
 
 ################################################################################
-# UID to Package Resolution
+# UID to Package Resolution (handles multiple processes)
 ################################################################################
 
 resolve_uid() {
@@ -96,11 +122,93 @@ resolve_uid() {
   if [ -f "$cfile" ]; then
     cat "$cfile"
   else
+    # Get primary package
     pkg=$(pm list packages --uid "$uid" 2>/dev/null | cut -d':' -f2 | awk '{print $1}' | head -n1)
     [ -z "$pkg" ] && pkg="system"
     echo "$pkg" > "$cfile"
     echo "$pkg"
   fi
+}
+
+# Get all packages for a UID
+get_all_packages_for_uid() {
+  uid=$1
+  pm list packages --uid "$uid" 2>/dev/null | cut -d':' -f2 | awk '{print $1}' | tr '\n' ',' | sed 's/,$//'
+}
+
+################################################################################
+# IPv6 Address Processing
+################################################################################
+
+# Convert IPv6 to standard format
+normalize_ipv6() {
+  local addr="$1"
+  
+  # Check if it's IPv4-mapped IPv6
+  case "$addr" in
+    *:ffff:*|*:FFFF:*)
+      # Extract IPv4 part
+      local ipv4_part=$(echo "$addr" | awk -F: '{print $NF}')
+      if [ ${#ipv4_part} -gt 0 ]; then
+        echo "ipv4-mapped:$ipv4_part"
+      else
+        echo "$addr"
+      fi
+      ;;
+    *)
+      echo "$addr"
+      ;;
+  esac
+}
+
+# Parse IPv6 endpoint
+parse_ipv6_endpoint() {
+  local endpoint="$1"
+  local ip port
+  
+  # Handle IPv6 format: [ip]:port or just ip:port
+  if [ "${endpoint#\[}" != "$endpoint" ]; then
+    # Format: [ip]:port
+    ip=$(echo "$endpoint" | sed 's/\[\(.*\)\]:.*/\1/')
+    port=$(echo "$endpoint" | sed 's/.*\]:\(.*\)/\1/')
+  else
+    # Standard format
+    ip=$(echo "$endpoint" | sed 's/\(.*\):\([^:]*\)$/\1/')
+    port=$(echo "$endpoint" | sed 's/\(.*\):\([^:]*\)$/\2/')
+  fi
+  
+  echo "$ip|$port"
+}
+
+################################################################################
+# Connection State Tracking
+################################################################################
+
+track_connection_state() {
+  local conn_id="$1"
+  local state="$2"
+  local local_ip="$3"
+  local remote_ip="$4"
+  local local_port="$5"
+  local remote_port="$6"
+  local protocol="$7"
+  local uid="$8"
+  
+  local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+  
+  # Check if connection is new
+  if ! grep -q "^$conn_id" "$PREV_STATE" 2>/dev/null; then
+    echo "NEW|$timestamp|$protocol|$local_ip:$local_port|$remote_ip:$remote_port|$uid" >> "$TEMP_STATE"
+  else
+    # Check state change
+    prev_state=$(grep "^$conn_id" "$PREV_STATE" 2>/dev/null | cut -d'|' -f2)
+    if [ "$prev_state" != "$state" ]; then
+      echo "CHANGED|$timestamp|$protocol|$local_ip:$local_port|$remote_ip:$remote_port|$uid|$prev_state->$state" >> "$TEMP_STATE"
+    fi
+  fi
+  
+  # Update connection state
+  echo "$conn_id|$state|$timestamp|$protocol|$local_ip:$local_port|$remote_ip:$remote_port|$uid" >> "$TEMP_STATE"
 }
 
 ################################################################################
@@ -130,6 +238,48 @@ resolve_inode_pid() {
 }
 
 ################################################################################
+# Statistics Collection
+################################################################################
+
+generate_stats() {
+  local tcp_count=$(wc -l < "$TCP_LOG" 2>/dev/null || echo 0)
+  local udp_count=$(wc -l < "$UDP_LOG" 2>/dev/null || echo 0)
+  local unique_ips=$(cat "$TEMP_IPS" 2>/dev/null | cut -d' ' -f1 | sort -u | wc -l)
+  local unique_domains=$(grep -o '|[^|]*|$' "$DNS_RESOLVED" 2>/dev/null | sort -u | wc -l)
+  local new_connections=$(grep "^NEW" "$TEMP_STATE" 2>/dev/null | wc -l)
+  
+  {
+    echo "===================="
+    echo "NETWORK STATISTICS"
+    echo "===================="
+    echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo ""
+    echo "Connection Summary:"
+    echo "  TCP Established: $tcp_count"
+    echo "  UDP Active: $udp_count"
+    echo "  Total Connections: $((tcp_count + udp_count))"
+    echo ""
+    echo "Unique IP Addresses: $unique_ips"
+    echo "Unique Domains: $unique_domains"
+    echo "New Connections This Cycle: $new_connections"
+    echo ""
+    echo "===================="
+  } > "$STATS_SUMMARY"
+  
+  # Generate JSON stats
+  {
+    echo "{"
+    echo '  "timestamp": "'$(date '+%Y-%m-%d %H:%M:%S')'\",'
+    echo "  \"tcp_connections\": $tcp_count,"
+    echo "  \"udp_connections\": $udp_count,"
+    echo "  \"unique_ips\": $unique_ips,"
+    echo "  \"unique_domains\": $unique_domains,"
+    echo "  \"new_connections\": $new_connections"
+    echo "}"
+  } > "$STATS_JSON"
+}
+
+################################################################################
 # Main Monitoring Loop
 ################################################################################
 
@@ -139,23 +289,32 @@ while true; do
   DATETIME=$(date "+%Y-%m-%d %H:%M:%S")
   
   # Ensure directories exist
-  mkdir -p "$ACTIVITY_DIR" "$DOMAINS_DIR" 2>/dev/null
+  mkdir -p "$ACTIVITY_DIR" "$DOMAINS_DIR" "$STATS_DIR" 2>/dev/null
   
-  # Clear activity logs for fresh data each cycle (keep only current)
+  # Clear activity logs for fresh data each cycle
   > "$CURRENT_LOG"
   > "$INTERFACES_LOG"
   > "$TCP_LOG"
   > "$UDP_LOG"
+  > "$TEMP_STATE"
+  > "$TEMP_IPS"
+  > "$TEMP_CONNECTIONS"
   
-  # Initialize history headers if new day
+  # Initialize CSV headers if new day
   if [ ! -f "$IP_HISTORY" ]; then
-    printf "%-10s %-16s %-8s %-8s %-30s\n" \
-      "TIMESTAMP" "IP" "PORT" "UID" "PACKAGE" > "$IP_HISTORY"
+    echo "TIMESTAMP,IP,PORT,PROTOCOL,UID,PACKAGE,DOMAIN" > "$IP_HISTORY"
   fi
   
   if [ ! -f "$DOMAIN_HISTORY" ]; then
-    printf "%-10s %-16s %-35s %-30s %-6s\n" \
-      "TIMESTAMP" "IP" "DOMAIN" "PACKAGE" "PORT" > "$DOMAIN_HISTORY"
+    echo "TIMESTAMP,IP,DOMAIN,PACKAGE,PORT,PROTOCOL,RESOLUTION_TIME" > "$DOMAIN_HISTORY"
+  fi
+  
+  if [ ! -f "$DNS_RESOLVED" ]; then
+    echo "TIMESTAMP,IP,DOMAIN,CONFIDENCE,SOURCE" > "$DNS_RESOLVED"
+  fi
+  
+  if [ ! -f "$CONNECTION_STATE" ]; then
+    echo "STATE_CHANGE,TIMESTAMP,PROTOCOL,LOCAL,REMOTE,UID,TRANSITION" > "$CONNECTION_STATE"
   fi
 
   rm -f "$TEMP_IPS"
@@ -194,7 +353,7 @@ while true; do
   } > "$INTERFACES_LOG"
 
   ################################################################################
-  # TCP Connections
+  # TCP Connections (IPv4 + IPv6)
   ################################################################################
   
   TCP_OUT="/data/local/tmp/tcp_processed.tmp"
@@ -224,19 +383,22 @@ while true; do
         w3 = tolower(substr(raw_ip, 17, 8))
         w4 = substr(raw_ip, 25, 8)
 
+        # Check for IPv4-mapped IPv6
         if (w3 == "0000ffff" || w3 == "ffff0000" || substr(raw_ip, 1, 16) == "0000000000000000") {
           if (w4 != "00000000" && w4 != "00000001") {
-            return ipv4(w4) ":" hex2dec(raw_port)
+            return "IPv4-mapped:" ipv4(w4) ":" hex2dec(raw_port)
           }
         }
 
+        # Localhost
         if (w4 == "0100007f" || w4 == "7f000001") {
           return "127.0.0.1:" hex2dec(raw_port)
         }
 
-        return sprintf("%s:%s:%s:%s",
+        # Format IPv6
+        return sprintf("[%s:%s:%s:%s]:%s",
           substr(raw_ip,1,4), substr(raw_ip,5,4),
-          substr(raw_ip,25,4), substr(raw_ip,29,4)) ":" hex2dec(raw_port)
+          substr(raw_ip,25,4), substr(raw_ip,29,4), hex2dec(raw_port))
       }
       return ep
     }
@@ -255,23 +417,23 @@ while true; do
       if (state_str == "ESTAB" && (lip == "127.0.0.1" || rip == "127.0.0.1" || rip == "0.0.0.0")) next
       if (lport == 5555 || lport == 5037 || rport == 5555 || rport == 5037) next
 
-      print loc "|" rem "|" $5 "|" state_str "|" $8 "|" $10
+      print loc "|" rem "|TCP|" state_str "|" $8 "|" $10
 
       if (state_str == "ESTAB" && rip != "0.0.0.0")
-        print rip " " rport " " $8 " " $10 >> tmp_file
+        print rip " " rport " TCP " $8 " " $10 >> tmp_file
     }
   ' /proc/net/tcp /proc/net/tcp6 > "$TCP_OUT"
 
   {
     echo "========================================="
-    echo "TCP CONNECTIONS (ESTABLISHED)"
+    echo "TCP CONNECTIONS (IPv4 + IPv6)"
     echo "========================================="
-    printf "%-22s %-22s %-8s %-8s\n" "LOCAL" "REMOTE" "STATE" "UID"
+    printf "%-28s %-28s %-8s %-8s\n" "LOCAL" "REMOTE" "STATE" "UID"
     echo "-----------------------------------------"
 
-    while IFS="|" read -r loc rem queue state uid inode; do
+    while IFS="|" read -r loc rem proto state uid inode; do
       [ -z "$loc" ] && continue
-      printf "%-22s %-22s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
+      printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
     done < "$TCP_OUT"
     
     echo ""
@@ -280,7 +442,7 @@ while true; do
   rm -f "$TCP_OUT"
 
   ################################################################################
-  # UDP Connections
+  # UDP Connections (IPv4 + IPv6 - DNS, etc.)
   ################################################################################
   
   UDP_OUT="/data/local/tmp/udp_processed.tmp"
@@ -310,19 +472,22 @@ while true; do
         w3 = tolower(substr(raw_ip, 17, 8))
         w4 = substr(raw_ip, 25, 8)
 
+        # Check for IPv4-mapped IPv6
         if (w3 == "0000ffff" || w3 == "ffff0000" || substr(raw_ip, 1, 16) == "0000000000000000") {
           if (w4 != "00000000" && w4 != "00000001") {
-            return ipv4(w4) ":" hex2dec(raw_port)
+            return "IPv4-mapped:" ipv4(w4) ":" hex2dec(raw_port)
           }
         }
 
+        # Localhost
         if (w4 == "0100007f" || w4 == "7f000001") {
           return "127.0.0.1:" hex2dec(raw_port)
         }
 
-        return sprintf("%s:%s:%s:%s",
+        # Format IPv6
+        return sprintf("[%s:%s:%s:%s]:%s",
           substr(raw_ip,1,4), substr(raw_ip,5,4),
-          substr(raw_ip,25,4), substr(raw_ip,29,4)) ":" hex2dec(raw_port)
+          substr(raw_ip,25,4), substr(raw_ip,29,4), hex2dec(raw_port))
       }
       return ep
     }
@@ -337,23 +502,23 @@ while true; do
       if (lip == "127.0.0.1" || rip == "127.0.0.1") next
       if (lport == 5555 || lport == 5037 || rport == 5555 || rport == 5037) next
 
-      print loc "|" rem "|UDP|" $8 "|" $10
+      print loc "|" rem "|UDP|ACTIVE|" $8 "|" $10
 
       if (rip != "0.0.0.0" && rport != 0)
-        print rip " " rport " " $8 " " $10 >> tmp_file
+        print rip " " rport " UDP " $8 " " $10 >> tmp_file
     }
   ' /proc/net/udp /proc/net/udp6 > "$UDP_OUT"
 
   {
     echo "========================================="
-    echo "UDP CONNECTIONS (ACTIVE)"
+    echo "UDP CONNECTIONS (IPv4 + IPv6)"
     echo "========================================="
-    printf "%-22s %-22s %-8s %-8s\n" "LOCAL" "REMOTE" "TYPE" "UID"
+    printf "%-28s %-28s %-8s %-8s\n" "LOCAL" "REMOTE" "TYPE" "UID"
     echo "-----------------------------------------"
 
-    while IFS="|" read -r loc rem state uid inode; do
+    while IFS="|" read -r loc rem proto state uid inode; do
       [ -z "$loc" ] && continue
-      printf "%-22s %-22s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
+      printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$proto" "$uid"
     done < "$UDP_OUT"
     
     echo ""
@@ -384,26 +549,36 @@ while true; do
   ################################################################################
   
   if [ -f "$TEMP_IPS" ]; then
-    while read -r rip rport uid inode; do
+    while read -r rip rport protocol uid inode; do
       [ -z "$rip" ] && continue
       
       # Check if already logged today
-      if ! grep -qE "[[:space:]]${rip}[[:space:]]+${rport}[[:space:]]" "$IP_HISTORY" 2>/dev/null; then
+      if ! grep -q "^$TIMESTAMP.*${rip}" "$IP_HISTORY" 2>/dev/null; then
         pkg=$(resolve_uid "$uid")
         domain=$(get_domain "$rip")
         
-        # Log to IP History
-        printf "%-10s %-16s %-8s %-8s %-30s\n" "$TIMESTAMP" "$rip" "$rport" "$uid" "$pkg" >> "$IP_HISTORY"
+        # Log to IP History (CSV)
+        echo "$TIMESTAMP,$rip,$rport,$protocol,$uid,$pkg,$domain" >> "$IP_HISTORY"
         
-        # Log to Domain History - DOMAIN and PACKAGE columns closer together
-        printf "%-10s %-16s %-35s %-30s %-6s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" "$rport" >> "$DOMAIN_HISTORY"
+        # Log to Domain History (CSV) - compact format
+        echo "$TIMESTAMP,$rip,$domain,$pkg,$rport,$protocol,$(date +%s)" >> "$DOMAIN_HISTORY"
         
-        # Log to resolved domains (global)
-        printf "%-10s %-16s %-35s %-30s\n" "$TIMESTAMP" "$rip" "$domain" "$pkg" >> "$DNS_RESOLVED"
+        # Log to resolved domains (CSV)
+        echo "$TIMESTAMP,$rip,$domain,high,ip-api.com" >> "$DNS_RESOLVED"
       fi
     done < "$TEMP_IPS"
     rm -f "$TEMP_IPS"
   fi
+
+  # Append connection state changes
+  if [ -f "$TEMP_STATE" ]; then
+    cat "$TEMP_STATE" >> "$CONNECTION_STATE"
+    cp "$TEMP_STATE" "$PREV_STATE"
+    rm -f "$TEMP_STATE"
+  fi
+
+  # Generate statistics
+  generate_stats
 
   rm -f "$FD_MAP"
   
