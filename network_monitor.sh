@@ -98,7 +98,7 @@ get_domain() {
   fi
   
   # Resolve via ip-api.com (with timeout and error handling)
-  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"\([^\"]*\)\".*/\1/p'" 2>/dev/null)
+  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"//p' | sed 's/\".*//')
   
   # Extract main domain
   if [ -n "$domain" ]; then
@@ -112,7 +112,7 @@ get_domain() {
 }
 
 ################################################################################
-# UID to Package Resolution (handles multiple processes)
+# UID to Package Resolution (FIXED - handles multiple processes)
 ################################################################################
 
 resolve_uid() {
@@ -122,8 +122,18 @@ resolve_uid() {
   if [ -f "$cfile" ]; then
     cat "$cfile"
   else
-    # Get primary package
-    pkg=$(pm list packages --uid "$uid" 2>/dev/null | cut -d':' -f2 | awk '{print $1}' | head -n1)
+    # Method 1: Use packages.list (most reliable)
+    if [ -f "/data/system/packages.list" ]; then
+      pkg=$(awk -v u="$uid" '$2 == u {print $1; exit}' /data/system/packages.list 2>/dev/null)
+    fi
+    
+    # Method 2: Fallback - search /proc directly for app context
+    if [ -z "$pkg" ] && [ "$uid" -ge 10000 ] 2>/dev/null; then
+      app_user="u0_a$((uid - 10000))"
+      pkg=$(ps -o CMD= 2>/dev/null | grep -o "^[^ ]*" | head -1)
+    fi
+    
+    # Method 3: Last resort
     [ -z "$pkg" ] && pkg="system"
     echo "$pkg" > "$cfile"
     echo "$pkg"
@@ -133,7 +143,9 @@ resolve_uid() {
 # Get all packages for a UID
 get_all_packages_for_uid() {
   uid=$1
-  pm list packages --uid "$uid" 2>/dev/null | cut -d':' -f2 | awk '{print $1}' | tr '\n' ',' | sed 's/,$//'
+  if [ -f "/data/system/packages.list" ]; then
+    awk -v u="$uid" '$2 == u {print $1}' /data/system/packages.list | tr '\n' ',' | sed 's/,$//'
+  fi
 }
 
 ################################################################################
@@ -212,25 +224,27 @@ track_connection_state() {
 }
 
 ################################################################################
-# Inode/PID Resolution
+# Inode/PID Resolution (FIXED)
 ################################################################################
 
 resolve_inode_pid() {
   target_inode=$1
   target_uid=$2
 
-  if [ -n "$target_inode" ] && [ "$target_inode" != "0" ]; then
+  # Try inode mapping first (only if FD_MAP exists)
+  if [ -n "$target_inode" ] && [ "$target_inode" != "0" ] && [ -f "$FD_MAP" ]; then
     pid=$(awk -v ino="$target_inode" '$1 == ino {print $2; exit}' "$FD_MAP" 2>/dev/null)
     [ -n "$pid" ] && { echo "$pid"; return; }
   fi
 
+  # Try UID-based resolution
   if [ -n "$target_uid" ] && [ "$target_uid" != "0" ]; then
     if [ "$target_uid" -ge 10000 ] 2>/dev/null; then
       app_user="u0_a$((target_uid - 10000))"
+      pid=$(ps -o PID= -o USER= 2>/dev/null | awk -v u="$app_user" '$2 == u {print $1; exit}')
     else
-      app_user="$target_uid"
+      pid=$(ps -o PID= -o UID= 2>/dev/null | awk -v uid="$target_uid" '$2 == uid {print $1; exit}')
     fi
-    pid=$(ps -ef 2>/dev/null | awk -v u="$app_user" -v uid="$target_uid" 'NR > 1 && ($1 == u || $1 == uid) { print $2; exit }')
     [ -n "$pid" ] && { echo "$pid"; return; }
   fi
 
