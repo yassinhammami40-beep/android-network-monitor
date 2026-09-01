@@ -1,24 +1,64 @@
 # Android Network Monitor v2.0
 
-> Advanced network analysis tool for Android with full IPv4/IPv6 support, DNS correlation, connection lifecycle tracking, and multi-format output (TXT/CSV/JSON).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Shell Script](https://img.shields.io/badge/Shell_Script-121011?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://www.android.com/)
+[![Termux](https://img.shields.io/badge/Termux-black?logo=android&logoColor=white)](https://termux.com/)
+![Last Updated](https://img.shields.io/badge/Updated-2026--09--01-blue)
+![Status](https://img.shields.io/badge/Status-Active%20Development-green)
 
-## 🎯 Features
+> **Advanced network analysis tool for Android** — Monitor TCP/UDP connections in real-time with full IPv4/IPv6 support, DNS correlation, connection lifecycle tracking, and multi-format output (TXT/CSV/JSON).
+
+## 🎯 Quick Start (2 minutes)
+
+### Install & Run
+
+```bash
+# Clone repository
+git clone https://github.com/yassinhammami40-beep/android-network-monitor.git
+cd android-network-monitor
+
+# Make executable
+chmod +x network_monitor.sh
+
+# Run via Termux (easiest method)
+./network_monitor.sh
+
+# OR via ADB from computer
+adb shell "cat > /data/local/tmp/network_monitor.sh < network_monitor.sh && sh /data/local/tmp/network_monitor.sh"
+```
+
+### View Results
+
+```bash
+# Real-time activity (auto-updates)
+tail -f /sdcard/Download/network-monitor/logs/activity/current.txt
+
+# Or open in file manager
+/sdcard/Download/network-monitor/
+```
+
+**That's it!** The tool will start monitoring and creating logs automatically.
+
+---
+
+## ✨ Features
 
 ### Core Capabilities
-- ✅ **Full IPv4 & IPv6 Support** - Monitors both `tcp/tcp6` and `udp/udp6` sockets
-- ✅ **IPv4-Mapped IPv6 Handling** - Automatically detects and converts `::ffff:x.x.x.x` addresses
-- ✅ **Connection Lifecycle Tracking** - Detects NEW, ACTIVE, and CLOSED connections
-- ✅ **DNS Correlation** - Reverse DNS lookups with intelligent caching
-- ✅ **Multi-UID Resolution** - Handles Android services sharing UIDs across multiple processes
-- ✅ **Multiple Output Formats** - TXT (browser-friendly), CSV, and JSON outputs
-- ✅ **Real-time Statistics** - Connection counts, unique IPs, and domain metrics
-- ✅ **Clean Logging** - Organized folder structure with separate concerns
+- ✅ **Full IPv4 & IPv6 Support** — Monitors both `tcp/tcp6` and `udp/udp6` sockets
+- ✅ **IPv4-Mapped IPv6 Handling** — Automatically detects and converts `::ffff:x.x.x.x` addresses
+- ✅ **Connection Lifecycle Tracking** — Detects NEW, ACTIVE, and CLOSED connections
+- ✅ **DNS Correlation** — Reverse DNS lookups with intelligent caching
+- ✅ **Multi-UID Resolution** — Handles Android services sharing UIDs across multiple processes
+- ✅ **Multiple Output Formats** — TXT (browser-friendly), CSV, and JSON outputs
+- ✅ **Real-time Statistics** — Connection counts, unique IPs, and domain metrics
+- ✅ **Clean Logging** — Organized folder structure with separate concerns
 
 ### Network Traffic Types
-- **TCP Connections** - ESTABLISHED and LISTEN states (IPv4 & IPv6)
-- **UDP Sockets** - Active UDP ports including DNS traffic (IPv4 & IPv6)
-- **Interface Statistics** - RX/TX byte counters per network interface
-- **DNS Resolution** - Reverse DNS with fallback to "unknown"
+- **TCP Connections** — ESTABLISHED and LISTEN states (IPv4 & IPv6)
+- **UDP Sockets** — Active UDP ports including DNS traffic (IPv4 & IPv6)
+- **Interface Statistics** — RX/TX byte counters per network interface
+- **DNS Resolution** — Reverse DNS with fallback to "unknown"
 
 ---
 
@@ -499,6 +539,8 @@ BASE_DIR="/sdcard/Download/network-monitor"
 
 ## 🤝 Contributing
 
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ### Report Issues
 - Include `/sdcard/Download/network-monitor/logs/monitor.log`
 - Share sample output from `current.txt`
@@ -514,7 +556,7 @@ BASE_DIR="/sdcard/Download/network-monitor"
 
 ## 📜 License
 
-MIT License - See LICENSE file
+MIT License - See [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -540,11 +582,13 @@ A: No, only connection metadata from `/proc/net/`. For packet capture, use tcpdu
 ## 📞 Support
 
 For issues and questions:
-- GitHub Issues: [Android Network Monitor Issues](https://github.com/yassinhammami40-beep/android-network-monitor/issues)
-- Email: yassinhammami40@gmail.com
+- **GitHub Issues**: [Report a bug](https://github.com/yassinhammami40-beep/android-network-monitor/issues)
+- **Email**: yassinhammami40@gmail.com
 
 ---
 
-**Last Updated:** 2026-08-31  
+**Last Updated:** 2026-09-01  
 **Version:** 2.0  
 **Status:** Active Development
+
+Give this project a ⭐ if it helps you!
