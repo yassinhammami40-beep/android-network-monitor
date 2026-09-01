@@ -52,91 +52,20 @@
 ## 🔧 Technical Architecture
 
 ### Data Flow Diagram
-
-```
-                        ╔═════════════════════════╗
-                        ║   /proc/net/tcp*        ║
-                        ║   (TCP/UDP Socket Data) ║
-                        ╚═════════════╤═════════╝
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-            ╔─────────────╗  ╔──────────────╗  ╔──────────────╗
-            ║Local IP:Port║  ║Remote IP:Port║  ║State & UID   ║
-            ║             ║  ║               ║  ║              ║
-            ╚─────┬───────╝  ╚────┬──────────╝  ╚────┬─────────╝
-                  │               │                  │
-                  └───────────────┼──────────────────┘
-                                  │
-                                  ▼
-                        ╔═════════════════════════╗
-                        ║  Parse Hex Endpoints    ║
-                        ║  - IPv4 & IPv6 Support  ║
-                        ║  - Detect IPv4-mapped   ║
-                        ║  - Format: IP:PORT      ║
-                        ╚═════════════╤═════════╝
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-            ╔─────────────╗  ╔──────────────╗  ╔──────────────╗
-            ║ Local Addr  ║  ║  Remote IP   ║  ║    State     ║
-            ║ Local Port  ║  ║  Remote Port ║  ║(ESTAB/LISTEN)║
-            ╚──────┬──────╝  ╚──────┬───────╝  ╚──────┬────────╝
-                   │                │               │
-                   └────────────────┼───────────────┘
-                                    │
-                                    ▼
-                        ╔═════════════════════════╗
-                        ║ Extract Socket Inode    ║
-                        ║ from /proc/net/tcp*     ║
-                        ╚═════════════╤═════════╝
-                                      │
-                                      ▼
-                        ╔═════════════════════════╗
-                        ║ Search /proc/<PID>/fd/  ║
-                        ║ Match inode with:       ║
-                        ║ socket:[<inode>]        ║
-                        ╚═════════���═══╤═════════╝
-                                      │
-                                      ▼
-                        ╔═════════════════════════╗
-                        ║ Extract PID Owner       ║
-                        ║ From process listing    ║
-                        ╚═════════════╤═════════╝
-                                      │
-                                      ▼
-                        ╔═════════════════════════╗
-                        ║ Extract UID from PID    ║
-                        ║ Via /proc/<PID>/stat    ║
-                        ║ or ps output            ║
-                        ╚═════════════╤═════════╝
-                                      │
-                                      ▼
-                        ╔═════════════════════════╗
-                        ║ Resolve Package Name    ║
-                        ║ pm list packages        ║
-                        ║ --uid <UID>             ║
-                        ║ (with caching)          ║
-                        ╚═════════════╤═════════╝
-                                      │
-                                      ▼
-                        ╔═════════════════════════╗
-                        ║ Resolve Reverse DNS     ║
-                        ║ Remote IP → Domain      ║
-                        ║ (ip-api.com with TTL)   ║
-                        ║ Cache result            ║
-                        ╚═════════════╤═════════╝
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-            ╔────────────╗    ╔──────────────╗  ╔──────────────╗
-            ║  TXT Output║    ║CSV Analysis  ║  ║JSON Metrics  ║
-            ║(Browser)   │    │(Persistent)  ║  │(Statistics)  ║
-            ╚────────────╝    ╚──────────────╝  ╚──────────────╝
-```
+```mermaid
+graph TD
+    A["/proc/net/tcp*<br/>(local_endpoint | remote_endpoint | state | UID | socket_inode)"] --> B1["local_endpoint<br/>remote_endpoint<br/>STATE<br/>UID<br/>socket_inode"]
+    A --> B2["remote_endpoint<br/>+ STATE<br/>+ UID"]
+    B1 --> C["Parse Hex Endpoints<br/>(IPv4 & IPv6 Support)<br/>Detect IPv4-mapped<br/>Format: IP:PORT"]
+    B2 --> C
+    C --> D1["Local Addr<br/>Local Port"]
+    C --> D2["Remote IP<br/>Port"]
+    C --> D3["State<br/>(ESTAB/LISTEN)"]
+    D1 --> E["Extract Socket Inode<br/>from /proc/net/tcp*"]
+    D2 --> E
+    D3 --> E
+    E --> F["Search /proc/&lt;PID&gt;/fd/<br/>Find matching inode:<br/>socket:[&lt;inode&gt;]"]
+    F --> G["Extract PID Owner<br/>From process listing"]
 
 ### 1. IPv6 Support
 
