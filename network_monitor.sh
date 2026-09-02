@@ -98,7 +98,7 @@ get_domain() {
   fi
   
   # Resolve via ip-api.com (with timeout and error handling)
-  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"//p' | sed 's/\".*//')
+  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"//p' | cut -d'\"' -f1")
   
   # Extract main domain
   if [ -n "$domain" ]; then
@@ -335,7 +335,7 @@ while true; do
 
   # Map socket inodes to active PIDs
   ls -l /proc/[0-9]*/fd 2>/dev/null | awk '
-    /\/proc\/[0-9]+\/fd:/ { split($0, a, "/"); pid = a[3] }
+    /\/proc\/[0-9]+\/fd\:/ { split($0, a, "/"); pid = a[3] }
     /socket:\[[0-9]+\]/ {
       if (match($0, /socket:\[[0-9]+\]/)) {
         s = substr($0, RSTART, RLENGTH)
