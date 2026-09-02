@@ -1,15 +1,22 @@
 #!/system/bin/sh
 
 ################################################################################
-# Android Network Monitor v2.0 - Advanced Network Analysis
+# Android Network Monitor v2.1 - Termux-Compatible Advanced Network Analysis
 # Features:
 #  - Full IPv4 and IPv6 support with IPv4-mapped IPv6 handling
 #  - TCP/UDP connection tracking with lifecycle management
-#  - DNS correlation and caching
+#  - DNS correlation and caching with robust fallback chain
 #  - Connection state tracking (NEW, ACTIVE, CLOSED)
 #  - Multiple output formats (TXT, CSV, JSON)
 #  - Comprehensive logging and metrics
+#  - Seamless Termux binary integration
 ################################################################################
+
+# Termux Binary Path Integration (Dynamic Fallback)
+if [ -d "/data/data/com.termux/files/usr/bin" ]; then
+  export PATH="/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/sbin:$PATH"
+  export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/lib:$LD_LIBRARY_PATH"
+fi
 
 # Directory Structure
 BASE_DIR="/sdcard/Download/network-monitor"
@@ -17,7 +24,7 @@ LOGS_DIR="$BASE_DIR/logs"
 ACTIVITY_DIR="$LOGS_DIR/activity"
 DOMAINS_DIR="$BASE_DIR/domains"
 STATS_DIR="$BASE_DIR/stats"
-CACHE_DIR="/data/local/tmp/.net_monitor_cache"
+CACHE_DIR="$BASE_DIR/.cache"
 
 # Output Files (.txt for browser compatibility)
 CURRENT_LOG="$ACTIVITY_DIR/current.txt"
@@ -37,16 +44,38 @@ DOMAIN_CORRELATION="$DOMAINS_DIR/domain_correlation.csv"
 STATS_SUMMARY="$STATS_DIR/summary_$(date +%Y-%m-%d).txt"
 STATS_JSON="$STATS_DIR/stats_$(date +%Y-%m-%d).json"
 
-# Temporary Files
-TEMP_IPS="/data/local/tmp/current_ips.tmp"
-TEMP_CONNECTIONS="/data/local/tmp/connections.tmp"
-TEMP_STATE="/data/local/tmp/connection_state.tmp"
-FD_MAP="/data/local/tmp/fd_inodes.tmp"
-PREV_STATE="/data/local/tmp/prev_state.tmp"
+# Temporary Files (moved to .cache directory for better permission handling)
+TEMP_IPS="$CACHE_DIR/current_ips.tmp"
+TEMP_CONNECTIONS="$CACHE_DIR/connections.tmp"
+TEMP_STATE="$CACHE_DIR/connection_state.tmp"
+FD_MAP="$CACHE_DIR/fd_inodes.tmp"
+PREV_STATE="$CACHE_DIR/prev_state.tmp"
 
 # Constants
 RESOLUTION_TIMEOUT=3
 DNS_CACHE_TTL=3600  # 1 hour
+
+################################################################################
+# Utility Functions
+################################################################################
+
+# Safe file existence and read (prevents errors on empty files)
+safe_wc() {
+  [ -f "$1" ] && wc -l < "$1" 2>/dev/null || echo 0
+}
+
+safe_grep() {
+  [ -f "$1" ] && grep "$2" "$1" 2>/dev/null || true
+}
+
+safe_cat() {
+  [ -f "$1" ] && cat "$1" 2>/dev/null || true
+}
+
+# Check if a binary is available
+has_binary() {
+  command -v "$1" >/dev/null 2>&1
+}
 
 ################################################################################
 # Initialize Directories & Cleanup
@@ -59,13 +88,13 @@ init_directories() {
   find "$ACTIVITY_DIR" -type f -mtime +0 -delete 2>/dev/null
   
   # Clean temporary files
-  rm -f "$TEMP_IPS" "$TEMP_CONNECTIONS" "$TEMP_STATE" "$FD_MAP" /data/local/tmp/*_processed.tmp 2>/dev/null
+  rm -f "$CACHE_DIR"/*.tmp 2>/dev/null
 }
 
 # Initialize on startup
 if [ ! -d "$BASE_DIR" ]; then
   init_directories
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Network Monitor v2.0 initialized" > "$LOGS_DIR/monitor.log"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Network Monitor v2.1 initialized" > "$LOGS_DIR/monitor.log"
 fi
 
 ################################################################################
@@ -90,25 +119,49 @@ get_domain() {
   
   # Check cache first
   if [ -f "$DNS_CACHE" ]; then
-    domain=$(grep "^${ip}=" "$DNS_CACHE" 2>/dev/null | cut -d'=' -f2 | head -1)
+    domain=$(safe_grep "$DNS_CACHE" "^${ip}=" | cut -d'=' -f2 | head -1)
     if [ -n "$domain" ]; then
       echo "$domain"
       return
     fi
   fi
   
-  # Resolve via ip-api.com (with timeout and error handling)
-  domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/$ip?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null | sed -n 's/.*\"reverse\":\"//p' | cut -d'\"' -f1")
-  
-  # Extract main domain
-  if [ -n "$domain" ]; then
-    local main_domain=$(echo "$domain" | awk -F. '{if (NF>2) print $(NF-1)"."$NF; else print $0}')
-    echo "${ip}=${main_domain}" >> "$DNS_CACHE"
-    echo "$main_domain"
-  else
-    echo "${ip}=unknown" >> "$DNS_CACHE"
-    echo "unknown"
+  # Method 1: Try `dig` (Termux bind-tools)
+  if has_binary dig; then
+    domain=$(timeout "$RESOLUTION_TIMEOUT" dig +short -x "$ip" 2>/dev/null | grep -v "^;" | tail -1 | sed 's/\.$//')
+    if [ -n "$domain" ] && [ "$domain" != "." ]; then
+      local main_domain=$(echo "$domain" | awk -F. '{if (NF>2) print $(NF-1)"."$NF; else print $0}')
+      echo "${ip}=${main_domain}" >> "$DNS_CACHE"
+      echo "$main_domain"
+      return
+    fi
   fi
+  
+  # Method 2: Try `curl` + `jq` (Termux curl, jq)
+  if has_binary curl && has_binary jq; then
+    domain=$(timeout "$RESOLUTION_TIMEOUT" curl -s "http://ip-api.com/json/${ip}?fields=reverse" 2>/dev/null | jq -r '.reverse // empty' 2>/dev/null | sed 's/\.$//')
+    if [ -n "$domain" ] && [ "$domain" != "null" ]; then
+      local main_domain=$(echo "$domain" | awk -F. '{if (NF>2) print $(NF-1)"."$NF; else print $0}')
+      echo "${ip}=${main_domain}" >> "$DNS_CACHE"
+      echo "$main_domain"
+      return
+    fi
+  fi
+  
+  # Method 3: Fallback to direct API call using nc/netcat (legacy, no jq required)
+  if has_binary nc; then
+    domain=$(timeout "$RESOLUTION_TIMEOUT" sh -c "echo -e 'GET /json/${ip}?fields=reverse HTTP/1.1\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n' | nc -w 2 ip-api.com 80 2>/dev/null" | grep -o '"reverse":"[^"]*"' | cut -d'"' -f4)
+    if [ -n "$domain" ] && [ "$domain" != "null" ]; then
+      local main_domain=$(echo "$domain" | awk -F. '{if (NF>2) print $(NF-1)"."$NF; else print $0}')
+      echo "${ip}=${main_domain}" >> "$DNS_CACHE"
+      echo "$main_domain"
+      return
+    fi
+  fi
+  
+  # Default: cache as unknown
+  echo "${ip}=unknown" >> "$DNS_CACHE"
+  echo "unknown"
 }
 
 ################################################################################
@@ -209,11 +262,11 @@ track_connection_state() {
   local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
   
   # Check if connection is new
-  if ! grep -q "^$conn_id" "$PREV_STATE" 2>/dev/null; then
+  if ! safe_grep "$PREV_STATE" "^$conn_id" | grep -q .; then
     echo "NEW|$timestamp|$protocol|$local_ip:$local_port|$remote_ip:$remote_port|$uid" >> "$TEMP_STATE"
   else
     # Check state change
-    prev_state=$(grep "^$conn_id" "$PREV_STATE" 2>/dev/null | cut -d'|' -f2)
+    prev_state=$(safe_grep "$PREV_STATE" "^$conn_id" | cut -d'|' -f2)
     if [ "$prev_state" != "$state" ]; then
       echo "CHANGED|$timestamp|$protocol|$local_ip:$local_port|$remote_ip:$remote_port|$uid|$prev_state->$state" >> "$TEMP_STATE"
     fi
@@ -256,11 +309,17 @@ resolve_inode_pid() {
 ################################################################################
 
 generate_stats() {
-  local tcp_count=$(wc -l < "$TCP_LOG" 2>/dev/null || echo 0)
-  local udp_count=$(wc -l < "$UDP_LOG" 2>/dev/null || echo 0)
-  local unique_ips=$(cat "$TEMP_IPS" 2>/dev/null | cut -d' ' -f1 | sort -u | wc -l)
-  local unique_domains=$(grep -o '|[^|]*|$' "$DNS_RESOLVED" 2>/dev/null | sort -u | wc -l)
-  local new_connections=$(grep "^NEW" "$TEMP_STATE" 2>/dev/null | wc -l)
+  local tcp_count=$(safe_wc "$TCP_LOG")
+  tcp_count=$((tcp_count - 5))  # Subtract header and separator lines
+  [ "$tcp_count" -lt 0 ] && tcp_count=0
+  
+  local udp_count=$(safe_wc "$UDP_LOG")
+  udp_count=$((udp_count - 5))  # Subtract header and separator lines
+  [ "$udp_count" -lt 0 ] && udp_count=0
+  
+  local unique_ips=$(safe_cat "$TEMP_IPS" | cut -d' ' -f1 | sort -u | wc -l)
+  local unique_domains=$(safe_grep "$DNS_RESOLVED" "[^|]*$" | cut -d',' -f3 | sort -u | wc -l)
+  local new_connections=$(safe_grep "$TEMP_STATE" "^NEW" | wc -l)
   
   {
     echo "===================="
@@ -303,7 +362,7 @@ while true; do
   DATETIME=$(date "+%Y-%m-%d %H:%M:%S")
   
   # Ensure directories exist
-  mkdir -p "$ACTIVITY_DIR" "$DOMAINS_DIR" "$STATS_DIR" 2>/dev/null
+  mkdir -p "$ACTIVITY_DIR" "$DOMAINS_DIR" "$STATS_DIR" "$CACHE_DIR" 2>/dev/null
   
   # Clear activity logs for fresh data each cycle
   > "$CURRENT_LOG"
@@ -370,7 +429,7 @@ while true; do
   # TCP Connections (IPv4 + IPv6)
   ################################################################################
   
-  TCP_OUT="/data/local/tmp/tcp_processed.tmp"
+  TCP_OUT="$CACHE_DIR/tcp_processed.tmp"
 
   awk -v tmp_file="$TEMP_IPS" '
     function hex2dec(h, i, v, c) {
@@ -436,7 +495,7 @@ while true; do
       if (state_str == "ESTAB" && rip != "0.0.0.0")
         print rip " " rport " TCP " $8 " " $10 >> tmp_file
     }
-  ' /proc/net/tcp /proc/net/tcp6 > "$TCP_OUT"
+  ' /proc/net/tcp /proc/net/tcp6 > "$TCP_OUT" 2>/dev/null
 
   {
     echo "========================================="
@@ -445,10 +504,12 @@ while true; do
     printf "%-28s %-28s %-8s %-8s\n" "LOCAL" "REMOTE" "STATE" "UID"
     echo "-----------------------------------------"
 
-    while IFS="|" read -r loc rem proto state uid inode; do
-      [ -z "$loc" ] && continue
-      printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
-    done < "$TCP_OUT"
+    if [ -f "$TCP_OUT" ]; then
+      while IFS="|" read -r loc rem proto state uid inode; do
+        [ -z "$loc" ] && continue
+        printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$state" "$uid"
+      done < "$TCP_OUT"
+    fi
     
     echo ""
   } > "$TCP_LOG"
@@ -459,7 +520,7 @@ while true; do
   # UDP Connections (IPv4 + IPv6 - DNS, etc.)
   ################################################################################
   
-  UDP_OUT="/data/local/tmp/udp_processed.tmp"
+  UDP_OUT="$CACHE_DIR/udp_processed.tmp"
 
   awk -v tmp_file="$TEMP_IPS" '
     function hex2dec(h, i, v, c) {
@@ -521,7 +582,7 @@ while true; do
       if (rip != "0.0.0.0" && rport != 0)
         print rip " " rport " UDP " $8 " " $10 >> tmp_file
     }
-  ' /proc/net/udp /proc/net/udp6 > "$UDP_OUT"
+  ' /proc/net/udp /proc/net/udp6 > "$UDP_OUT" 2>/dev/null
 
   {
     echo "========================================="
@@ -530,10 +591,12 @@ while true; do
     printf "%-28s %-28s %-8s %-8s\n" "LOCAL" "REMOTE" "TYPE" "UID"
     echo "-----------------------------------------"
 
-    while IFS="|" read -r loc rem proto state uid inode; do
-      [ -z "$loc" ] && continue
-      printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$proto" "$uid"
-    done < "$UDP_OUT"
+    if [ -f "$UDP_OUT" ]; then
+      while IFS="|" read -r loc rem proto state uid inode; do
+        [ -z "$loc" ] && continue
+        printf "%-28s %-28s %-8s %-8s\n" "$loc" "$rem" "$proto" "$uid"
+      done < "$UDP_OUT"
+    fi
     
     echo ""
   } > "$UDP_LOG"
@@ -550,9 +613,9 @@ while true; do
     echo "NETWORK ACTIVITY - $DATETIME"
     echo "========================================="
     echo ""
-    cat "$INTERFACES_LOG"
-    cat "$TCP_LOG"
-    cat "$UDP_LOG"
+    safe_cat "$INTERFACES_LOG"
+    safe_cat "$TCP_LOG"
+    safe_cat "$UDP_LOG"
     echo "========================================="
     echo "Updated: $DATETIME"
     echo "========================================="
@@ -567,7 +630,7 @@ while true; do
       [ -z "$rip" ] && continue
       
       # Check if already logged today
-      if ! grep -q "^$TIMESTAMP.*${rip}" "$IP_HISTORY" 2>/dev/null; then
+      if ! safe_grep "$IP_HISTORY" "$TIMESTAMP.*${rip}" | grep -q .; then
         pkg=$(resolve_uid "$uid")
         domain=$(get_domain "$rip")
         
@@ -578,14 +641,14 @@ while true; do
         echo "$TIMESTAMP,$rip,$domain,$pkg,$rport,$protocol,$(date +%s)" >> "$DOMAIN_HISTORY"
         
         # Log to resolved domains (CSV)
-        echo "$TIMESTAMP,$rip,$domain,high,ip-api.com" >> "$DNS_RESOLVED"
+        echo "$TIMESTAMP,$rip,$domain,high,api" >> "$DNS_RESOLVED"
       fi
     done < "$TEMP_IPS"
     rm -f "$TEMP_IPS"
   fi
 
   # Append connection state changes
-  if [ -f "$TEMP_STATE" ]; then
+  if [ -f "$TEMP_STATE" ] && [ -s "$TEMP_STATE" ]; then
     cat "$TEMP_STATE" >> "$CONNECTION_STATE"
     cp "$TEMP_STATE" "$PREV_STATE"
     rm -f "$TEMP_STATE"
