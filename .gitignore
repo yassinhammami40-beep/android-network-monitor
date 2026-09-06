@@ -1,0 +1,6 @@
+*.log
+*.csv
+*.tmp
+.queue/
+.cache/
+*.db
